@@ -1,52 +1,21 @@
-import copy
+from data import *
 from glob import glob
-from torch.utils.data import Dataset
-from PIL import Image
 from scipy.io import loadmat
 import torchvision
 from torch import nn
 from torch.utils.data import DataLoader
 #from torch.utils.tensorboard import SummaryWriter
-from torchvision import transforms
+
 import time
 
-from Delta_Compressor import QD_Compressor
-from Quantizator import *
-
+from delta_compressor import qd_compressor
+from quantizator import *
+import datetime
+def format_time(time):
+    elapsed_rounded = int(round((time)))
+    # 格式化为 hh:mm:ss
+    return str(datetime.timedelta(seconds=elapsed_rounded))
 t0 = time.time()
-def deep_copy_model(model):
-    model_copy = copy.deepcopy(model)
-    for param in model_copy.parameters():
-        param.requires_grad = False
-    return model_copy
-class MyData(Dataset):  # 图片预处理
-    def __init__(self, img_path, img_label):
-        self.img_path = img_path
-        self.img_label = img_label
-        self.transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])  # 数据调整到指定大小，并进行归一化
-
-    def __len__(self):
-        return len(self.img_path)
-
-    def __getitem__(self, idx):
-        img = self.img_path[idx]
-        img = Image.open(img).convert("RGB")
-        img = self.transform(img)
-        return img, self.img_label[idx]
-
-class TestSet(Dataset):  # 图片预处理
-    def __init__(self, img_path):
-        self.img_path = img_path
-        self.transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])  # 数据调整到指定大小，并进行归一化
-
-    def __len__(self):
-        return len(self.img_path)
-
-    def __getitem__(self, idx):
-        img = self.img_path[idx]
-        img = Image.open(img).convert("RGB")
-        img = self.transform(img)
-        return img
 
 
 if __name__ == '__main__':
@@ -63,8 +32,8 @@ if __name__ == '__main__':
     train_label = torch.tensor(labels[:8000]).reshape(-1).long() - 1
     val_label = torch.tensor(labels[8000:]).reshape(-1).long() - 1
 
-    train_dataset = MyData(train_img_path, train_label)
-    val_dataset = MyData(val_img_path, val_label)
+    train_dataset = ImgData(train_img_path, train_label)
+    val_dataset = ImgData(val_img_path, val_label)
     test_dataset = TestSet(test_img_path)
 
     len_val = len(val_dataset)
@@ -91,14 +60,12 @@ if __name__ == '__main__':
     epoch = 50
     total_training_step = 0
 
-    S_Snapshot = {}
-    Z_Snapshot = {}
-    torch.save(vgg, "origin_vgg19_lr005_epoch50.pth")
+    torch.save(vgg, "./model/origin_vgg19_lr005_epoch50.pth")
     quantized_model_old = copy.deepcopy(vgg)
     quantized_model_new = copy.deepcopy(vgg)
     for i in range(epoch):
         if i == 0:
-            S_Snapshot[i], Z_Snapshot[i], quantized_model_old_state_dict = Quantize_Model(vgg)
+            S, Z, quantized_model_old_state_dict = quantize_model(vgg)
             quantized_model_old.load_state_dict(quantized_model_old_state_dict)
         else:
             quantized_model_old.load_state_dict(quantized_model_new_state_dict)
@@ -120,9 +87,9 @@ if __name__ == '__main__':
             # if total_training_step % 50 == 0:
             #writer.add_scalar("train_loss", result_loss.item(), total_training_step)
             print("训练次数:{}, loss:{}".format(total_training_step, result_loss.item()))
-        S_Snapshot[i], Z_Snapshot[i], quantized_model_new_state_dict = Quantize_Model(vgg)
+        S, Z, quantized_model_new_state_dict = quantize_model(vgg)
         quantized_model_new.load_state_dict(quantized_model_new_state_dict)
-        QD_Compressor(quantized_model_old, quantized_model_new, path=f"./Snapshots/Snapshot_epoch{i}")
+        qd_compressor(quantized_model_old, quantized_model_new, S, Z, path=f"./Snapshots/Snapshot_epoch{i}", compressed_s_path=f"./scales/scale_epoch{i}", compressed_z_path=f"./zero_points/zero_point_epoch{i}")
         #得到第i轮网络模型
         #验证步骤
         total_val_loss = 0
@@ -141,18 +108,12 @@ if __name__ == '__main__':
         print("整体验证集上的loss:{}".format(total_val_loss))
         #writer.add_scalar("test_accuracy", total_accuracy/len_val, i)
         print("整体验证集上的正确率:{}".format(total_accuracy/len_val))
+        torch.save(vgg, f"./model/origin_vgg19_lr005_epoch50_{i}.pth")
 
 
     #writer.close()
     t1 = time.time()
     training_time = t1 - t0
-    import datetime
-
-
-    def format_time(time):
-        elapsed_rounded = int(round((time)))
-        # 格式化为 hh:mm:ss
-        return str(datetime.timedelta(seconds=elapsed_rounded))
 
 
     training_time = format_time(training_time)
